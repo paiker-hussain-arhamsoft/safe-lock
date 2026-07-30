@@ -1,0 +1,132 @@
+#!/bin/sh
+
+print_pgp_key() {
+  cat <<-EOF
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+<INSERT USG PGP PUBLIC KEY BLOCK HERE>
+
+-----END PGP PUBLIC KEY BLOCK-----
+EOF
+}
+
+install_deb() {
+  LIST_FILE=/etc/apt/sources.list.d/usg.list
+  PREF_FILE=/etc/apt/preferences.d/pin-usg.pref
+
+  echo -n "Adding usg to your repository list.."
+  echo "deb [signed-by=/usr/share/keyrings/usg.gpg] $DOWNLOAD_URI/apt stable main" > $LIST_FILE
+  print_pgp_key | gpg --dearmor -o /usr/share/keyrings/usg.gpg
+
+  if [ ! -f $PREF_FILE ]; then
+    mkdir -p /etc/apt/preferences.d/
+    cat > $PREF_FILE <<EOF
+Package: usg*
+Pin: origin downloads.usg.com
+Pin-Priority: 1000
+EOF
+  fi
+
+  echo -n "Updating package cache.."
+  apt-get update > /dev/null
+  echo "OK"
+  echo "Checking for and installing update.."
+  apt-get install -y --allow-downgrades usg
+}
+
+install_rpm() {
+  echo "Checking for and installing update.."
+  REPO_FILE=/etc/yum.repos.d/usg.repo
+  GPG_KEY_FILE=/etc/pki/rpm-gpg/RPM-GPG-KEY-USG
+
+  echo -n "Adding usg to your repository list.."
+  cat > $REPO_FILE <<EOF
+[usg]
+name=USG
+baseurl=$DOWNLOAD_URI/rpm
+gpgcheck=1
+gpgkey=file://$GPG_KEY_FILE
+enabled=1
+EOF
+
+  print_pgp_key > ${GPG_KEY_FILE}
+  yum install -y usg
+}
+
+install_suse() {
+  echo "Checking for and installing update.."
+  GPG_KEY_FILE_DIR=/etc/pki/rpm-gpg
+  GPG_KEY_FILE=${GPG_KEY_FILE_DIR}/RPM-GPG-KEY-USG
+
+  echo -n "Adding usg to your repository list.."
+  if [ ! -d $GPG_KEY_FILE_DIR ]; then
+    mkdir -p $GPG_KEY_FILE_DIR
+  fi
+
+  zypper ar -f $DOWNLOAD_URI/rpm usg
+  print_pgp_key > ${GPG_KEY_FILE}
+  rpmkeys --import ${GPG_KEY_FILE}
+  zypper install -y usg
+}
+
+install_pkg() {
+  (
+    cd ~/Downloads
+
+    echo "Downloading package..."
+    curl -O "$DOWNLOAD_URI/osx/usg-latest.pkg"
+
+    echo "Checking signature..."
+    if pkgutil --check-signature usg-latest.pkg; then
+      echo "Installing package..."
+      installer -pkg usg-latest.pkg -target /
+    fi
+
+    echo "Cleaning up..."
+    rm -fv usg-latest.pkg
+  )
+}
+
+DOWNLOAD_URI=https://downloads.usg.com/data/releases/usg
+PKGTYPE=unknown
+ID=`id -u`
+
+if [ -f /etc/redhat-release ] ; then
+  PKGTYPE=rpm
+elif [ -f /etc/system-release ] ; then
+  PKGTYPE=rpm
+else
+  if uname -sv | grep 'Darwin' > /dev/null; then
+    PKGTYPE=pkg
+  elif [ -f /usr/bin/zypper ] ; then
+    PKGTYPE=sus
+  else
+    PKGTYPE=deb
+  fi
+fi
+
+if [ "$ID" -ne 0 ]; then
+  if ! hash sudo 2>/dev/null; then
+    echo "This script must be executed as the 'root' user or with sudo"
+    exit 1
+  else
+    echo "Switching to root user to update the package"
+    sudo -E $0 $@
+    exit 0
+  fi
+fi
+
+case $PKGTYPE in
+  deb)
+    install_deb
+    ;;
+  sus)
+    install_suse
+    ;;
+  rpm)
+    install_rpm
+    ;;
+  *)
+    install_pkg
+    ;;
+ esac
